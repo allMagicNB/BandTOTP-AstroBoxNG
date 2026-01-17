@@ -448,6 +448,12 @@ fn handle_file_message(message: &Value) {
         }
         "next" => {
             let count = payload.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let total = {
+                let state = ui_state().lock().unwrap_or_else(|p| p.into_inner());
+                state.transfer.as_ref().map(|t| t.total_chunks).unwrap_or(0)
+            };
+            tracing::info!("recv next count={}, total_chunks={}", count, total);
+
             send_next_chunk(count, false);
         }
         "success" => {
@@ -519,7 +525,18 @@ fn send_next_chunk(current_chunk: usize, is_resend: bool) {
         let Some(transfer) = state.transfer.as_mut() else {
             return;
         };
-        if current_chunk >= transfer.total_chunks {
+        if current_chunk == transfer.total_chunks {
+            let message = serde_json::json!({
+                "tag": FILE_TAG,
+                "stat": "d",
+                "count": current_chunk,
+                "data": "",
+                "setCount": Value::Null,
+            });
+            send_interconnect_message(&transfer.device_addr, &message.to_string());
+            return;
+        }
+        if current_chunk > transfer.total_chunks {
             return;
         }
         let chunk = match transfer.chunk(current_chunk) {
@@ -541,6 +558,8 @@ fn send_next_chunk(current_chunk: usize, is_resend: bool) {
             speed_text,
         )
     };
+
+    tracing::info!("chunk {} len={} bytes", current_chunk, chunk.as_bytes().len());
 
     let progress = current_chunk as f32 / total_chunks as f32;
     {
@@ -787,7 +806,7 @@ fn format_bytes(bytes: usize) -> String {
 fn build_main_ui(state: &UiState) -> ui::Element {
     let file_label = ui::Element::new(ui::ElementType::P, Some("文件"))
         .size(12)
-        .text_color("#9A9A9A")
+        .text_color("#666666")
         .margin_bottom(4);
     let file_info = match &state.file_name {
         Some(name) => format!("{} | {}", name, format_bytes(state.file_size_bytes)),
@@ -795,40 +814,24 @@ fn build_main_ui(state: &UiState) -> ui::Element {
     };
     let file_info = ui::Element::new(ui::ElementType::P, Some(file_info.as_str()))
         .size(14)
-        .text_color("#E6E6E6")
         .margin_bottom(12);
 
     let mut pick_button = ui::Element::new(ui::ElementType::Button, Some("选择文件"))
-        .without_default_styles()
-        .padding(10)
-        .radius(8)
-        .border(1, "#3A3A3A")
-        .bg("#2A2A2A")
-        .text_color("#E6E6E6")
+        .bg("f0f0f0")
         .on(ui::Event::Click, EVENT_PICK_FILE);
     if state.is_sending {
         pick_button = pick_button.disabled();
     }
 
     let mut send_button = ui::Element::new(ui::ElementType::Button, Some("发送"))
-        .without_default_styles()
-        .padding(10)
-        .radius(8)
-        .border(1, "#3A3A3A")
-        .bg("#2A2A2A")
-        .text_color("#E6E6E6")
+        .bg("f0f0f0")
         .on(ui::Event::Click, EVENT_SEND_FILE);
     if state.is_sending || state.file_text.is_none() {
         send_button = send_button.disabled();
     }
 
     let mut cancel_button = ui::Element::new(ui::ElementType::Button, Some("取消"))
-        .without_default_styles()
-        .padding(10)
-        .radius(8)
-        .border(1, "#3A3A3A")
-        .bg("#2A2A2A")
-        .text_color("#E6E6E6")
+        .bg("f0f0f0")
         .on(ui::Event::Click, EVENT_CANCEL_SEND);
     if !state.is_sending {
         cancel_button = cancel_button.disabled();
@@ -843,11 +846,6 @@ fn build_main_ui(state: &UiState) -> ui::Element {
         .child(cancel_button.margin_left(8))
         .margin_bottom(12);
 
-    let progress_label = if state.is_sending || state.progress > 0.0 {
-        format!("进度 {}%", (state.progress * 100.0).round())
-    } else {
-        "进度 -".to_string()
-    };
     let speed_label = format!(
         "速率 {}",
         state
@@ -855,19 +853,14 @@ fn build_main_ui(state: &UiState) -> ui::Element {
             .clone()
             .unwrap_or_else(|| "-".to_string())
     );
-    let progress_text = ui::Element::new(ui::ElementType::P, Some(progress_label.as_str()))
-        .size(12)
-        .text_color("#9A9A9A");
     let speed_text = ui::Element::new(ui::ElementType::P, Some(speed_label.as_str()))
         .size(12)
-        .text_color("#9A9A9A")
-        .margin_left(12);
+        .text_color("#666666");
     let progress_meta = ui::Element::new(ui::ElementType::Div, None)
         .flex()
         .flex_direction(ui::FlexDirection::Row)
         .align_center()
         .margin_bottom(6)
-        .child(progress_text)
         .child(speed_text);
 
     let progress_width = if state.progress <= 0.0 {
@@ -876,14 +869,13 @@ fn build_main_ui(state: &UiState) -> ui::Element {
         ((state.progress.clamp(0.0, 1.0) * 240.0).round() as u32).max(2)
     };
     let progress_fill = ui::Element::new(ui::ElementType::Div, None)
-        .bg("#6E6E6E")
+        .bg("#1781FF")
         .height(6)
         .width(progress_width)
         .radius(6)
         .transition("width 200ms ease");
     let progress_bar = ui::Element::new(ui::ElementType::Div, None)
-        .bg("#2B2B2B")
-        .border(1, "#3A3A3A")
+        .bg("#F0F0F0")
         .radius(6)
         .width(240)
         .height(6)
@@ -896,12 +888,11 @@ fn build_main_ui(state: &UiState) -> ui::Element {
         .unwrap_or_else(|| " ".to_string());
     let mut status = ui::Element::new(ui::ElementType::P, Some(status_text.as_str()))
         .size(12)
-        .text_color("#9A9A9A")
         .margin_bottom(4);
     if state.status_message.is_some() {
         status = match state.status_tone {
-            StatusTone::Success => status.text_color("#6BCB77"),
-            StatusTone::Error => status.text_color("#FF6B6B"),
+            StatusTone::Success => status.text_color("#2E7D32"),
+            StatusTone::Error => status.text_color("#B00020"),
             StatusTone::Neutral => status,
         };
     }
@@ -910,8 +901,7 @@ fn build_main_ui(state: &UiState) -> ui::Element {
         .flex()
         .flex_direction(ui::FlexDirection::Column)
         .padding(16)
-        .bg("#1F1F1F")
-        .border(1, "#2A2A2A")
+        .border(1, "#1f1f1f")
         .radius(10)
         .width_full()
         .child(file_label)
