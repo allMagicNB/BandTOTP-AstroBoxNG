@@ -8,6 +8,7 @@ interface os {
     version: func() -> future<string>;
     astrobox-language: func() -> future<string>;
     appearance: func() -> future<string>;
+    timezone-offset-minutes: func() -> future<s32>;
 }
 
 interface transport {
@@ -69,6 +70,8 @@ interface dialog {
     show-dialog: func(dialog-type: dialog-type, style: dialog-style, info: dialog-info) -> future<dialog-result>;
 
     pick-file: func(config: pick-config, filter: filter-config) -> future<pick-result>;
+
+    open-url: func(url: string);
 }
 
 interface ui {
@@ -217,6 +220,12 @@ interface queue {
     }
 
     add-resource-to-queue: func(res-type: resource-type, file-path: string);
+}
+
+interface timer {
+    set-timeout: func(delay-ms: u64, payload: string) -> future<u64>;
+    set-interval: func(interval-ms: u64, payload: string) -> future<u64>;
+    clear-timer: func(timer-id: u64) -> future;
 }
 
 interface interconnect {

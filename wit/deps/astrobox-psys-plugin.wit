@@ -14,6 +14,7 @@ interface event {
         deeplink-action,
 
         transport-packet, // 需plugin执行host接口register-transport-recv才会收到
+        timer,
     }
 
     on-event: func(event-type: event-type, event-payload: string) -> future<string>;
