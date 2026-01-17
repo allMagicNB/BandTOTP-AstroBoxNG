@@ -1,4 +1,6 @@
-use crate::astrobox::psys_host::{self, device, dialog, interconnect, register, thirdpartyapp, timer, ui};
+use crate::astrobox::psys_host::{
+    self, device, dialog, interconnect, register, thirdpartyapp, timer, ui,
+};
 use serde_json::Value;
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
@@ -6,13 +8,14 @@ use std::time::SystemTime;
 const PACKAGE_NAME: &str = "com.bandbbs.ebook";
 const HANDSHAKE_TAG: &str = "__hs__";
 const FILE_TAG: &str = "file";
-const FILE_CHUNK_BYTES: usize = 20 * 1024;
+const FILE_CHUNK_BYTES: usize = 48 * 1024;
 
 const EVENT_PICK_FILE: &str = "pick_file";
 const EVENT_SEND_FILE: &str = "send_file";
 const EVENT_CANCEL_SEND: &str = "cancel_send";
 
 const TIMER_HIDE_MESSAGE: &str = "timer_hide_message";
+const TIMER_START_HANDSHAKE: &str = "timer_start_handshake";
 const TIMER_HANDSHAKE_TIMEOUT: &str = "timer_handshake_timeout";
 
 #[derive(Clone, Copy)]
@@ -99,6 +102,24 @@ pub fn handle_timer_event(event_payload: &str) {
                 render_from_state();
             }
         }
+        TIMER_START_HANDSHAKE => {
+            let device_addr = {
+                let mut state = ui_state().lock().unwrap_or_else(|p| p.into_inner());
+                state.handshake_timer_id = None;
+
+                let Some(t) = state.transfer.as_ref() else {
+                    return;
+                };
+                t.device_addr.clone()
+            };
+
+            {
+                let mut state = ui_state().lock().unwrap_or_else(|p| p.into_inner());
+                schedule_handshake_timeout(&mut state);
+            }
+
+            send_handshake_message(&device_addr, 0);
+        }
         TIMER_HANDSHAKE_TIMEOUT => {
             let mut should_render = false;
             {
@@ -161,20 +182,20 @@ fn handle_pick_file() {
         Ok(text) => text,
         Err(_) => {
             {
-            let mut state = ui_state()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            set_status_message(
-                &mut state,
-                "文件不是 UTF-8 文本，无法发送",
-                StatusTone::Error,
-                true,
-            );
-            state.file_name = None;
-            state.file_text = None;
-            state.file_size_bytes = 0;
-            state.progress = 0.0;
-            state.speed_text = None;
+                let mut state = ui_state()
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                set_status_message(
+                    &mut state,
+                    "文件不是 UTF-8 文本，无法发送",
+                    StatusTone::Error,
+                    true,
+                );
+                state.file_name = None;
+                state.file_text = None;
+                state.file_size_bytes = 0;
+                state.progress = 0.0;
+                state.speed_text = None;
             }
             render_from_state();
             return;
@@ -294,7 +315,8 @@ fn handle_send_file() {
         register::register_interconnect_recv(&device_addr, PACKAGE_NAME).await
     });
 
-    let transfer = match build_transfer_state(device_addr.clone(), file_name, file_text, file_size) {
+    let transfer = match build_transfer_state(device_addr.clone(), file_name, file_text, file_size)
+    {
         Ok(transfer) => transfer,
         Err(msg) => {
             {
@@ -314,10 +336,12 @@ fn handle_send_file() {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         state.transfer = Some(transfer);
-        schedule_handshake_timeout(&mut state);
+
+        let timer_id =
+            wit_bindgen::block_on(async { timer::set_timeout(1500, TIMER_START_HANDSHAKE).await });
+        state.handshake_timer_id = Some(timer_id);
     }
 
-    send_handshake_message(&device_addr, 0);
     render_from_state();
 }
 
@@ -371,11 +395,7 @@ fn handle_handshake_message(message: &Value) {
                 transfer.pending_start = false;
             }
             let should_reply = count < 2;
-            (
-                transfer.device_addr.clone(),
-                should_start,
-                should_reply,
-            )
+            (transfer.device_addr.clone(), should_start, should_reply)
         };
         let timer_to_clear = if count > 0 {
             state.handshake_timer_id.take()
@@ -422,18 +442,16 @@ fn handle_file_message(message: &Value) {
                     let mut state = ui_state()
                         .lock()
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    set_status_message(
-                        &mut state,
-                        "手环端存储空间不足",
-                        StatusTone::Error,
-                        true,
-                    );
+                    set_status_message(&mut state, "手环端存储空间不足", StatusTone::Error, true);
                     finish_transfer(&mut state, true);
                 }
                 render_from_state();
                 return;
             }
-            let found = payload.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
+            let found = payload
+                .get("found")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             let length = payload.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
             if found && length > 0 {
                 let current_chunk = (length as usize) / FILE_CHUNK_BYTES;
@@ -505,12 +523,7 @@ fn send_start_transfer() {
             let mut state = ui_state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            set_status_message(
-                &mut state,
-                "发送失败，请重试",
-                StatusTone::Error,
-                true,
-            );
+            set_status_message(&mut state, "发送失败，请重试", StatusTone::Error, true);
             finish_transfer(&mut state, true);
         }
         render_from_state();
@@ -559,7 +572,11 @@ fn send_next_chunk(current_chunk: usize, is_resend: bool) {
         )
     };
 
-    tracing::info!("chunk {} len={} bytes", current_chunk, chunk.as_bytes().len());
+    tracing::info!(
+        "chunk {} len={} bytes",
+        current_chunk,
+        chunk.as_bytes().len()
+    );
 
     let progress = current_chunk as f32 / total_chunks as f32;
     {
@@ -572,25 +589,20 @@ fn send_next_chunk(current_chunk: usize, is_resend: bool) {
         set_status_message(&mut state, &status, StatusTone::Neutral, false);
     }
 
-        let message = serde_json::json!({
-            "tag": FILE_TAG,
-            "stat": "d",
-            "count": current_chunk,
-            "data": chunk,
-            "setCount": if is_resend { Value::from(current_chunk as u64) } else { Value::Null },
-        });
+    let message = serde_json::json!({
+        "tag": FILE_TAG,
+        "stat": "d",
+        "count": current_chunk,
+        "data": chunk,
+        "setCount": if is_resend { Value::from(current_chunk as u64) } else { Value::Null },
+    });
 
     if !send_interconnect_message(&device_addr, &message.to_string()) {
         {
             let mut state = ui_state()
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            set_status_message(
-                &mut state,
-                "发送失败，请重试",
-                StatusTone::Error,
-                true,
-            );
+            set_status_message(&mut state, "发送失败，请重试", StatusTone::Error, true);
             finish_transfer(&mut state, true);
         }
         render_from_state();
@@ -704,9 +716,8 @@ fn schedule_hide_message(state: &mut UiState) {
 
 fn schedule_handshake_timeout(state: &mut UiState) {
     clear_handshake_timer(state);
-    let timer_id = wit_bindgen::block_on(async {
-        timer::set_timeout(3000, TIMER_HANDSHAKE_TIMEOUT).await
-    });
+    let timer_id =
+        wit_bindgen::block_on(async { timer::set_timeout(3000, TIMER_HANDSHAKE_TIMEOUT).await });
     state.handshake_timer_id = Some(timer_id);
 }
 
@@ -752,23 +763,18 @@ fn clear_transfer_state(state: &mut UiState, clear_progress: bool) {
     clear_handshake_timer(state);
 }
 
-fn compute_speed_text(
-    last_time: &mut Option<SystemTime>,
-    chunk_bytes: usize,
-) -> Option<String> {
+fn compute_speed_text(last_time: &mut Option<SystemTime>, chunk_bytes: usize) -> Option<String> {
     let now = SystemTime::now();
     let speed_text = last_time.and_then(|prev| {
-        now.duration_since(prev)
-            .ok()
-            .and_then(|elapsed| {
-                let secs = elapsed.as_secs_f64();
-                if secs <= 0.0 {
-                    None
-                } else {
-                    let speed = (chunk_bytes as f64 / secs) as usize;
-                    Some(format!("{}/s", format_bytes(speed)))
-                }
-            })
+        now.duration_since(prev).ok().and_then(|elapsed| {
+            let secs = elapsed.as_secs_f64();
+            if secs <= 0.0 {
+                None
+            } else {
+                let speed = (chunk_bytes as f64 / secs) as usize;
+                Some(format!("{}/s", format_bytes(speed)))
+            }
+        })
     });
     *last_time = Some(now);
     speed_text
@@ -848,10 +854,7 @@ fn build_main_ui(state: &UiState) -> ui::Element {
 
     let speed_label = format!(
         "速率 {}",
-        state
-            .speed_text
-            .clone()
-            .unwrap_or_else(|| "-".to_string())
+        state.speed_text.clone().unwrap_or_else(|| "-".to_string())
     );
     let speed_text = ui::Element::new(ui::ElementType::P, Some(speed_label.as_str()))
         .size(12)
