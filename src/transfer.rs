@@ -245,19 +245,19 @@ pub fn handle_interconnect_message(payload: &str) {
                 let usage = data_obj.get("usage").and_then(|v| v.as_u64()).unwrap_or(0);
                 let found = data_obj.get("found").and_then(|v| v.as_bool()).unwrap_or(false);
                 let length = data_obj.get("length").and_then(|v| v.as_u64()).unwrap_or(0);
-                wit_bindgen::spawn(async move {
+                wit_bindgen::rt::async_support::block_on(async move {
                     handle_ready(found, usage, length).await;
                 });
             }
             "next" => {
                 let count = data_obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                wit_bindgen::spawn(async move {
+                wit_bindgen::rt::async_support::block_on(async move {
                     send_chunk(count, false).await;
                 });
             }
             "error" => {
                 let count = data_obj.get("count").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
-                wit_bindgen::spawn(async move {
+                wit_bindgen::rt::async_support::block_on(async move {
                     update_status("传输中断，正在重试...", false);
                     send_chunk(count, true).await;
                 });

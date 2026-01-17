@@ -37,7 +37,7 @@ impl event::Guest for MyPlugin {
 
         tracing::info!("event_payload: {}", event_payload);
 
-        wit_bindgen::spawn(async move {
+        wit_bindgen::rt::async_support::block_on(async move {
             let _ = writer.write("".to_string()).await;
         });
 
@@ -51,9 +51,8 @@ impl event::Guest for MyPlugin {
     ) -> wit_bindgen::rt::async_support::FutureReader<_rt::String> {
         let (writer, reader) = wit_future::new::<String>(|| "".to_string());
 
-        ui::ui_event_processor(event, &event_id);
-
-        wit_bindgen::spawn(async move {
+        wit_bindgen::rt::async_support::block_on(async move {
+            ui::ui_event_processor(event, &event_id).await;
             let _ = writer.write("".to_string()).await;
         });
 
@@ -65,7 +64,7 @@ impl event::Guest for MyPlugin {
 
         ui::render_main_ui(&element_id);
 
-        wit_bindgen::spawn(async move {
+        wit_bindgen::rt::async_support::block_on(async move {
             let _ = writer.write(()).await;
         });
 
@@ -75,7 +74,7 @@ impl event::Guest for MyPlugin {
     fn on_card_render(_card_id: _rt::String) -> wit_bindgen::rt::async_support::FutureReader<()> {
         let (writer, reader) = wit_future::new::<()>(|| ());
 
-        wit_bindgen::spawn(async move {
+        wit_bindgen::rt::async_support::block_on(async move {
             let _ = writer.write(()).await;
         });
 

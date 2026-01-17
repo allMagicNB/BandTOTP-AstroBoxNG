@@ -34,23 +34,17 @@ fn snapshot_state() -> UiSnapshot {
     }
 }
 
-pub fn ui_event_processor(evtype: ui::Event, event: &str) {
+pub async fn ui_event_processor(evtype: ui::Event, event: &str) {
     match evtype {
         ui::Event::Click => match event {
             PICK_FILE_EVENT => {
-                wit_bindgen::spawn(async move {
-                    transfer::pick_file_and_update_state().await;
-                });
+                transfer::pick_file_and_update_state().await;
             }
             SEND_FILE_EVENT => {
-                wit_bindgen::spawn(async move {
-                    transfer::start_send().await;
-                });
+                transfer::start_send().await;
             }
             CANCEL_SEND_EVENT => {
-                wit_bindgen::spawn(async move {
-                    transfer::cancel_send().await;
-                });
+                transfer::cancel_send().await;
             }
             _ => {}
         },
