@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::sync::{Mutex, OnceLock};
 use std::time::SystemTime;
 
-const PACKAGE_NAME: &str = "com.bandbbs.ebook";
+const PACKAGE_NAME: &str = "com.lst,bandtotp";
 const HANDSHAKE_TAG: &str = "__hs__";
 const FILE_TAG: &str = "file";
 const FILE_CHUNK_BYTES: usize = 48 * 1024;
